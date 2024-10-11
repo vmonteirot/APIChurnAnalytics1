@@ -1,5 +1,5 @@
 # Usando a imagem .NET SDK como ambiente de build
-FROM mcr.microsoft.com/dotnet/sdk:6.0 AS build-env
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build-env
 WORKDIR /app
 
 # Copiando o csproj e restaurando como camada distinta
