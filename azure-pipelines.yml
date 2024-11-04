@@ -4,32 +4,87 @@ trigger:
       - main
 
 pool:
-  vmImage: 'windows-latest'
+  vmImage: 'ubuntu-latest'
 
-steps:
-- task: UseDotNet@2
-  inputs:
-    packageType: 'sdk'
-    version: '8.x'
+variables:
+  buildConfiguration: 'Release'
+  azureSubscription: 'conexao' # Nome da conexão de serviço configurada no Azure DevOps
+  webAppName: 'servicoapp-cp6' # Nome do Serviço de Aplicativo no Azure
+  resourceGroup: 'rg-cp6' # Nome do grupo de recursos onde o app será hospedado
 
-- task: DotNetCoreCLI@2
-  inputs:
-    command: 'restore'
-    projects: '**/*.csproj'
+stages:
+  - stage: Build
+    displayName: 'Build and Test Stage'
+    jobs:
+      - job: Build
+        displayName: 'Compilar, Testar e Publicar Artefatos'
+        steps:
+          - task: UseDotNet@2
+            inputs:
+              packageType: 'sdk'
+              version: '8.x' # Ajuste para a versão .NET necessária
 
-- task: DotNetCoreCLI@2
-  inputs:
-    command: 'build'
-    projects: '**/*.csproj'
-    arguments: '--configuration Release'
+          - task: DotNetCoreCLI@2
+            inputs:
+              command: 'restore'
+              projects: '**/*.csproj'
 
-- task: DotNetCoreCLI@2
-  inputs:
-    command: 'publish'
-    projects: '**/*.csproj'
-    arguments: '--configuration Release --output $(Build.ArtifactStagingDirectory)'
+          - task: DotNetCoreCLI@2
+            inputs:
+              command: 'build'
+              arguments: '--configuration $(buildConfiguration)'
+              projects: '**/*.csproj'
 
-- task: PublishBuildArtifacts@1
-  inputs:
-    pathToPublish: '$(Build.ArtifactStagingDirectory)'
-    artifactName: 'drop'
+          - task: DotNetCoreCLI@2
+            inputs:
+              command: 'test'
+              arguments: '--configuration $(buildConfiguration) --no-build --logger trx' # Salva os logs de teste em formato .trx
+              projects: '**/*Tests/*.csproj'
+            
+          - task: PublishTestResults@2 # Publica os resultados dos testes
+            inputs:
+              testResultsFiles: '**/*.trx'
+              testRunTitle: 'Resultados dos Testes Unitários'
+              mergeTestResults: true
+
+          - task: DotNetCoreCLI@2
+            inputs:
+              command: 'publish'
+              arguments: '--configuration $(buildConfiguration) --output $(Build.ArtifactStagingDirectory)'
+              projects: '**/*.csproj'
+
+          - task: PublishBuildArtifacts@1
+            inputs:
+              pathToPublish: '$(Build.ArtifactStagingDirectory)'
+              artifactName: 'drop'
+              publishLocation: 'Container'
+
+  - stage: Deploy
+    displayName: 'Deploy Stage'
+    dependsOn: Build
+    jobs:
+      - deployment: DeployWebApp
+        displayName: 'Deploy para o App Service'
+        environment: 'production'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - download: current
+                  artifact: drop
+
+                - task: AzureWebApp@1
+                  inputs:
+                    azureSubscription: '$(azureSubscription)'
+                    appName: '$(webAppName)'
+                    package: '$(Pipeline.Workspace)/drop/*'
+                    runtimeStack: 'DOTNETCORE|8.0' # Ajuste para a stack DOTNETCORE 8.0
+
+                - task: AzureCLI@2
+                  inputs:
+                    azureSubscription: '$(azureSubscription)'
+                    scriptType: 'bash'
+                    scriptLocation: 'inlineScript'
+                    inlineScript: |
+                      az webapp update --resource-group $(resourceGroup) --name $(webAppName) --https-only true
+                      echo "Configuração HTTPS realizada com sucesso"
